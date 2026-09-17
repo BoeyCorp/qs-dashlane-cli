@@ -1,0 +1,22 @@
+{
+  "name": "qs-dashlane-cli",
+  "version": "1.0.0",
+  "description": "Dashlane Password Manager integration for Omarchy status bar and quick access panel",
+  "main": "DashlaneModel.js",
+  "scripts": {
+    "test": "node --test tests/model.test.js",
+    "validate": "omarchy plugin validate ."
+  },
+  "keywords": [
+    "omarchy",
+    "omarchy-plugin",
+    "quickshell",
+    "dashlane",
+    "dashlane-cli",
+    "dcli",
+    "password-manager",
+    "hyprland"
+  ],
+  "author": "BoeyCorp",
+  "license": "MIT"
+}

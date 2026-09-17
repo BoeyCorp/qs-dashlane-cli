@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.boeycorp.qs-dashlane-cli",
+  "name": "Dashlane",
+  "version": "1.0.0",
+  "author": "BoeyCorp",
+  "license": "MIT",
+  "description": "Dashlane password manager integration for the Omarchy status bar and quick access panel.",
+  "kinds": [
+    "bar-widget",
+    "service"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml",
+    "service": "Service.qml"
+  },
+  "barWidget": {
+    "displayName": "Dashlane",
+    "description": "Search logins, copy passwords & OTP codes, and manage your Dashlane vault directly from the bar.",
+    "category": "Utilities",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "autoLockMinutes": 15,
+      "lockOnScreenLock": true,
+      "lockOnSuspend": true,
+      "clearClipboardSec": 30,
+      "autoCopyTotpSec": 3,
+      "closeOnCopy": true,
+      "suggestOnOpen": true,
+      "colorizeIcon": false
+    },
+    "schema": [
+      {
+        "key": "autoLockMinutes",
+        "type": "integer",
+        "label": "Auto-lock timeout (minutes)",
+        "description": "Lock vault automatically after minutes of inactivity (0 to disable)",
+        "min": 0,
+        "max": 1440,
+        "step": 5,
+        "defaultValue": 15
+      },
+      {
+        "key": "lockOnScreenLock",
+        "type": "boolean",
+        "label": "Lock when the screen locks",
+        "description": "Lock the vault as soon as the screen locks, instead of waiting out the auto-lock timeout. Uses the Omarchy lock screen's state.",
+        "defaultValue": true
+      },
+      {
+        "key": "lockOnSuspend",
+        "type": "boolean",
+        "label": "Lock when the machine suspends",
+        "description": "Lock the vault when the system goes to sleep, preventing decrypted credentials from persisting in memory.",
+        "defaultValue": true
+      },
+      {
+        "key": "clearClipboardSec",
+        "type": "integer",
+        "label": "Clear clipboard timeout (seconds)",
+        "description": "Automatically clear copied password or OTP from clipboard after seconds (0 to disable)",
+        "min": 0,
+        "max": 300,
+        "step": 5,
+        "defaultValue": 30
+      },
+      {
+        "key": "autoCopyTotpSec",
+        "type": "integer",
+        "label": "Auto-copy OTP delay (seconds)",
+        "description": "Automatically copy 2FA OTP code to clipboard shortly after copying password (0 to disable)",
+        "min": 0,
+        "max": 30,
+        "step": 1,
+        "defaultValue": 3
+      },
+      {
+        "key": "closeOnCopy",
+        "type": "boolean",
+        "label": "Close panel on copy",
+        "description": "Automatically close panel after selecting and copying an item with Enter",
+        "defaultValue": true
+      },
+      {
+        "key": "colorizeIcon",
+        "type": "boolean",
+        "label": "Colorize bar icon",
+        "description": "Use the active Omarchy theme accent for the primary bar icon.",
+        "defaultValue": false
+      },
+      {
+        "key": "suggestOnOpen",
+        "type": "boolean",
+        "label": "Contextual password suggestions",
+        "description": "Automatically match active window / browser tab to vault items on open",
+        "defaultValue": true
+      }
+    ]
+  },
+  "homepage": "https://github.com/BoeyCorp/qs-dashlane-cli",
+  "repository": "https://github.com/BoeyCorp/qs-dashlane-cli"
+}
