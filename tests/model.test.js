@@ -22,12 +22,13 @@ test("CLI command generation", () => {
   assert.strictEqual(Model.screenIsLocked("false\n"), false);
   assert.ok(Model.sleepMonitorCommand()[2].includes("gdbus monitor"));
 
-  // Clipboard clear commands
-  assert.deepStrictEqual(Model.clearClipboardCommand(), ["wl-copy", "--clear"]);
-  const targetedClear = Model.clearClipboardCommand("secret_to_wipe");
-  assert.strictEqual(targetedClear[0], "bash");
-  assert.ok(targetedClear[2].includes("wl-paste"));
-  assert.strictEqual(targetedClear[4], "secret_to_wipe");
+  // Clipboard clear commands - must use environment variable, never argv
+  const clearCmd = Model.clearClipboardCommand();
+  assert.strictEqual(clearCmd[0], "bash");
+  assert.strictEqual(clearCmd[1], "-c");
+  assert.ok(clearCmd[2].includes("EXPECTED_SECRET"));
+  assert.ok(clearCmd[2].includes("wl-copy --clear"));
+  assert.strictEqual(clearCmd.length, 3); // Fixed 3 elements, no extra argv arguments
 });
 
 test("parseStatus handles different outputs", () => {
@@ -240,10 +241,32 @@ test("Unlock error message sanitization", () => {
     "Too many failed attempts. Please try again later."
   );
 
-  // Missing CLI binary
+  // Exit code 127 is the most reliable signal and is checked first
+  assert.strictEqual(
+    Model.sanitizeUnlockError("", 127),
+    "Dashlane CLI (dcli) could not be executed. Please verify your installation."
+  );
   assert.strictEqual(
     Model.sanitizeUnlockError("bash: dcli: command not found", 127),
     "Dashlane CLI (dcli) could not be executed. Please verify your installation."
+  );
+  assert.strictEqual(
+    Model.sanitizeUnlockError("unknown arbitrary error", 127),
+    "Dashlane CLI (dcli) could not be executed. Please verify your installation."
+  );
+
+  // Overlapping patterns: "not found" in device/account/user messages must NOT trigger CLI reinstall
+  assert.strictEqual(
+    Model.sanitizeUnlockError("Error: Device not found or not registered", 1),
+    "Dashlane session expired or device not registered. Run 'dcli login' in terminal."
+  );
+  assert.strictEqual(
+    Model.sanitizeUnlockError("Error: Account not found", 1),
+    "Dashlane session expired or device not registered. Run 'dcli login' in terminal."
+  );
+  assert.strictEqual(
+    Model.sanitizeUnlockError("User not found in organization", 1),
+    "Dashlane session expired or device not registered. Run 'dcli login' in terminal."
   );
 
   // Internal path / stack trace sanitization (prevents leaking filesystem paths or internals)

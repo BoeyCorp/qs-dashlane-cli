@@ -39,12 +39,27 @@ function unlockCommand() {
 }
 
 function sanitizeUnlockError(rawStderr, exitCode) {
+  // Exit code 127 is the POSIX standard signal for command not found.
+  // Check this first as it is the most reliable indication that the binary is missing.
+  if (exitCode === 127) {
+    return "Dashlane CLI (dcli) could not be executed. Please verify your installation.";
+  }
+
   var raw = String(rawStderr || "").trim();
   if (!raw) {
     return "Incorrect master password.";
   }
 
   var lower = raw.toLowerCase();
+
+  // Missing CLI binary / execution failure from text output
+  if (
+    lower.includes("command not found") ||
+    (lower.includes("no such file or directory") && lower.includes("dcli")) ||
+    (lower.includes("enoent") && lower.includes("dcli"))
+  ) {
+    return "Dashlane CLI (dcli) could not be executed. Please verify your installation.";
+  }
 
   // 1. Password or decryption failures
   if (
@@ -54,6 +69,7 @@ function sanitizeUnlockError(rawStderr, exitCode) {
     lower.includes("authentication failed") ||
     lower.includes("auth failed") ||
     lower.includes("decrypt") ||
+    lower.includes("bad key") ||
     lower.includes("credential")
   ) {
     return "Incorrect master password.";
@@ -66,24 +82,14 @@ function sanitizeUnlockError(rawStderr, exitCode) {
     lower.includes("not logged in") ||
     lower.includes("session expired") ||
     lower.includes("unauthenticated") ||
-    lower.includes("unauthorized")
+    lower.includes("unauthorized") ||
+    lower.includes("account not found") ||
+    lower.includes("user not found")
   ) {
     return "Dashlane session expired or device not registered. Run 'dcli login' in terminal.";
   }
 
-  // 3. Network / communication issues
-  if (
-    lower.includes("network") ||
-    lower.includes("connect") ||
-    lower.includes("econnrefused") ||
-    lower.includes("timeout") ||
-    lower.includes("fetch failed") ||
-    lower.includes("dns")
-  ) {
-    return "Network error communicating with Dashlane servers.";
-  }
-
-  // 4. Rate limiting or lockouts
+  // 3. Rate limiting or lockouts
   if (
     lower.includes("rate limit") ||
     lower.includes("too many") ||
@@ -93,14 +99,17 @@ function sanitizeUnlockError(rawStderr, exitCode) {
     return "Too many failed attempts. Please try again later.";
   }
 
-  // 5. Binary not found or execution failure
+  // 4. Network / communication issues
   if (
-    lower.includes("command not found") ||
-    lower.includes("not found") ||
-    lower.includes("enoent") ||
-    exitCode === 127
+    lower.includes("network") ||
+    lower.includes("connect") ||
+    lower.includes("econnrefused") ||
+    lower.includes("timeout") ||
+    lower.includes("fetch failed") ||
+    lower.includes("dns") ||
+    lower.includes("socket")
   ) {
-    return "Dashlane CLI (dcli) could not be executed. Please verify your installation.";
+    return "Network error communicating with Dashlane servers.";
   }
 
   // Generic fallback: strictly avoid leaking file paths, tracebacks, or raw codes
@@ -164,19 +173,16 @@ function copyCommand(text) {
   return ["wl-copy", "--type", "text/plain", "--", String(text || "")];
 }
 
-function clearClipboardCommand(expectedText) {
-  if (expectedText) {
-    // Only clear if the clipboard still contains the expected secret,
-    // avoiding wiping unrelated user clips.
-    return [
-      "bash",
-      "-c",
-      "if [ \"$(wl-paste -n 2>/dev/null)\" = \"$1\" ]; then wl-copy --clear; fi",
-      "--",
-      String(expectedText)
-    ];
-  }
-  return ["wl-copy", "--clear"];
+function clearClipboardCommand() {
+  // Clears clipboard unconditionally if EXPECTED_SECRET is unset/empty,
+  // or clears only if the current clipboard content matches EXPECTED_SECRET.
+  // The secret is passed via Process.environment in Service.qml to avoid
+  // exposing sensitive data in argv or /proc/<pid>/cmdline.
+  return [
+    "bash",
+    "-c",
+    "if [ -z \"$EXPECTED_SECRET\" ] || [ \"$(wl-paste -n 2>/dev/null)\" = \"$EXPECTED_SECRET\" ]; then wl-copy --clear; fi"
+  ];
 }
 
 function openUrlCommand(url) {

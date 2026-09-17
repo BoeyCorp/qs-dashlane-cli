@@ -451,7 +451,7 @@ Item {
       clipboardClearTimer.stop();
 
       // Immediately purge clipboard on lock
-      clearClipboardProc.command = Model.clearClipboardCommand();
+      clearClipboardProc._expectedSecret = "";
       clearClipboardProc.running = true;
 
       root.notifyViews("Vault locked");
@@ -495,7 +495,7 @@ Item {
       clipboardClearTimer.stop();
 
       // Immediately purge clipboard on logout
-      clearClipboardProc.command = Model.clearClipboardCommand();
+      clearClipboardProc._expectedSecret = "";
       clearClipboardProc.running = true;
 
       root.notifyViews("Logged out of Dashlane");
@@ -563,7 +563,20 @@ Item {
 
   // Clipboard operations
   Process { id: copyProc }
-  Process { id: clearClipboardProc }
+  Process {
+    id: clearClipboardProc
+    property string _expectedSecret: ""
+    command: Model.clearClipboardCommand()
+    environment: ({
+      "EXPECTED_SECRET": _expectedSecret
+    })
+    onStarted: {
+      _expectedSecret = ""; // zero out immediately upon spawn
+    }
+    onExited: {
+      _expectedSecret = "";
+    }
+  }
   Process { id: openUrlProc }
   Process { id: terminalSyncProc }
   Process { id: terminalInstallProc }
@@ -612,7 +625,7 @@ Item {
     id: clipboardClearTimer
     repeat: false
     onTriggered: {
-      clearClipboardProc.command = Model.clearClipboardCommand(root.lastCopiedPassword);
+      clearClipboardProc._expectedSecret = root.lastCopiedPassword;
       clearClipboardProc.running = true;
       root.lastCopiedPassword = "";
       root.notifyViews("Clipboard cleared");
