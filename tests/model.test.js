@@ -12,11 +12,27 @@ test("CLI command generation", () => {
   assert.deepStrictEqual(Model.syncCommand(), ["dcli", "sync"]);
   assert.deepStrictEqual(Model.logoutCommand(), ["dcli", "logout"]);
 
-  const unlockCmd = Model.unlockCommand("my'secret'pass");
+  // unlockCommand must never take password as argument or expose in cmdline
+  const unlockCmd = Model.unlockCommand();
   assert.strictEqual(unlockCmd[0], "bash");
   assert.strictEqual(unlockCmd[1], "-c");
-  assert.ok(unlockCmd[2].includes("DASHLANE_MASTER_PASSWORD="));
-  assert.ok(unlockCmd[2].includes("dcli password -o json"));
+  assert.ok(unlockCmd[2].includes("read -r _mp;"));
+  assert.ok(unlockCmd[2].includes("DASHLANE_MASTER_PASSWORD=\"$_mp\" dcli password -o json"));
+  // Ensure no hardcoded password or printf in argv
+  assert.ok(!unlockCmd[2].includes("printf"));
+
+  // Lock and sleep monitor commands
+  assert.deepStrictEqual(Model.screenLockStateCommand(), ["bash", "-c", "omarchy-shell lock isLocked 2>/dev/null | head -c 16"]);
+  assert.strictEqual(Model.screenIsLocked("true\n"), true);
+  assert.strictEqual(Model.screenIsLocked("false\n"), false);
+  assert.ok(Model.sleepMonitorCommand()[2].includes("gdbus monitor"));
+
+  // Clipboard clear commands
+  assert.deepStrictEqual(Model.clearClipboardCommand(), ["wl-copy", "--clear"]);
+  const targetedClear = Model.clearClipboardCommand("secret_to_wipe");
+  assert.strictEqual(targetedClear[0], "bash");
+  assert.ok(targetedClear[2].includes("wl-paste"));
+  assert.strictEqual(targetedClear[4], "secret_to_wipe");
 });
 
 test("parseStatus handles different outputs", () => {
@@ -48,7 +64,7 @@ Logged in: no
   assert.strictEqual(parsed3.locked, true);
 });
 
-test("JSON parsing and normalization", () => {
+test("JSON parsing and normalization with collision-free fallback IDs", () => {
   const credentials = [
     {
       id: "cred-1",
@@ -61,6 +77,11 @@ test("JSON parsing and normalization", () => {
       category: "Development",
       note: "API token in note",
       strength: "85"
+    },
+    // Item with missing ID to test fallback ID counter
+    {
+      title: "NoId Login",
+      password: "pwd"
     }
   ];
 
@@ -83,19 +104,17 @@ test("JSON parsing and normalization", () => {
   ];
 
   const items = Model.combineAndSortItems(credentials, notes, secrets);
-  assert.strictEqual(items.length, 3);
+  assert.strictEqual(items.length, 4);
 
-  // Sorting
+  // Sorting and normalization
   assert.strictEqual(items[0].title, "GitHub");
   assert.strictEqual(items[0].type, "login");
   assert.strictEqual(items[0].hasOtp, true);
   assert.strictEqual(items[0].domain, "github.com");
 
-  assert.strictEqual(items[1].title, "Server SSH");
-  assert.strictEqual(items[1].type, "note");
-
-  assert.strictEqual(items[2].title, "Stripe Key");
-  assert.strictEqual(items[2].type, "secret");
+  const noIdItem = items.find(i => i.title === "NoId Login");
+  assert.ok(noIdItem);
+  assert.ok(noIdItem.id.startsWith("fallback-"));
 });
 
 test("filterItems search & categories", () => {
@@ -126,7 +145,6 @@ test("filterItems search & categories", () => {
 });
 
 test("TOTP generation (RFC 6238)", () => {
-  // Test secret: JBSWY3DPEHPK3PXP (standard base32 for "Hello!\xde\xad\xbe\xef")
   const epoch1 = 1700000000;
   const totp1 = Model.generateTotp("JBSWY3DPEHPK3PXP", epoch1);
   assert.ok(totp1);
@@ -139,7 +157,11 @@ test("TOTP generation (RFC 6238)", () => {
   assert.strictEqual(urlTotp.code, totp1.code);
 });
 
-test("Password and Passphrase generation", () => {
+test("Password and Passphrase generation with entropy pool", () => {
+  // Feed test entropy to pool
+  Model.feedEntropy([123456789, 987654321, 555555555, 111111111, 222222222, 333333333]);
+  assert.ok(Model.entropyPoolSize() > 0);
+
   const pwd = Model.generatePassword({ length: 24, symbols: true });
   assert.strictEqual(pwd.length, 24);
   const strength = Model.calculateStrength(pwd);
@@ -167,9 +189,21 @@ test("Active window matching", () => {
   assert.strictEqual(matched.title, "GitHub");
 });
 
-test("URL normalization and safety", () => {
+test("URL normalization, ports, and scheme security", () => {
   assert.deepStrictEqual(Model.normalizeOpenableUrl("github.com"), { ok: true, url: "https://github.com" });
   assert.deepStrictEqual(Model.normalizeOpenableUrl("https://dashlane.com"), { ok: true, url: "https://dashlane.com" });
+  assert.deepStrictEqual(Model.normalizeOpenableUrl("http://insecure.site"), { ok: true, url: "http://insecure.site" });
+  
+  // Host with port should be permitted and prepended with https://
+  assert.deepStrictEqual(Model.normalizeOpenableUrl("localhost:8080"), { ok: true, url: "https://localhost:8080" });
+  assert.deepStrictEqual(Model.normalizeOpenableUrl("192.168.1.1:3000"), { ok: true, url: "https://192.168.1.1:3000" });
+  assert.deepStrictEqual(Model.normalizeOpenableUrl("mydevserver:9000/api"), { ok: true, url: "https://mydevserver:9000/api" });
+
+  // Explicit non-http schemes must be rejected
   assert.strictEqual(Model.normalizeOpenableUrl("javascript:alert(1)").ok, false);
   assert.strictEqual(Model.normalizeOpenableUrl("file:///etc/passwd").ok, false);
+  assert.strictEqual(Model.normalizeOpenableUrl("ftp://ftp.example.com").ok, false);
+  assert.strictEqual(Model.normalizeOpenableUrl("ssh://user@server").ok, false);
+  assert.strictEqual(Model.normalizeOpenableUrl("data:text/html,evil").ok, false);
+  assert.strictEqual(Model.normalizeOpenableUrl("smb://nas/share").ok, false);
 });

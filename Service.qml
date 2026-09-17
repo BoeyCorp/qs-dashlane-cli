@@ -109,6 +109,9 @@ Item {
     activeTab = tab;
     touchActivity();
     recomputeFilter();
+    if (tab === "generator") {
+      replenishEntropy();
+    }
   }
 
   function setSelectedCategory(cat) {
@@ -164,8 +167,9 @@ Item {
     }
     syncing = true;
     errorMessage = "";
-    unlockProc.command = Model.unlockCommand(masterPassword);
+    unlockProc._masterPassword = masterPassword;
     unlockProc._callback = callback;
+    unlockProc.command = Model.unlockCommand();
     unlockProc.running = true;
   }
 
@@ -198,14 +202,9 @@ Item {
     copyProc.command = Model.copyCommand(text);
     copyProc.running = true;
 
-    // Auto-clear the clipboard for all vault content, not just passwords/secrets.
-    // Secure notes commonly contain API keys, recovery codes, and private keys,
-    // so treating them as non-sensitive was a security oversight.
-    // We use clearClipboardSec for all vault data and only track the
-    // lastCopiedPassword for the auto-TOTP follow-up flow.
-    if (isSecret) {
-      lastCopiedPassword = text;
-    }
+    // Track secret text so clipboard auto-clearing can target only this value
+    lastCopiedPassword = text;
+
     if (clearClipboardSec > 0) {
       clipboardClearTimer.interval = clearClipboardSec * 1000;
       clipboardClearTimer.restart();
@@ -277,6 +276,12 @@ Item {
   function checkActiveWindow() {
     if (suggestOnOpen && !locked && loggedIn) {
       activeWindowProc.running = true;
+    }
+  }
+
+  function replenishEntropy() {
+    if (!entropyProc.running) {
+      entropyProc.running = true;
     }
   }
 
@@ -386,10 +391,18 @@ Item {
     }
   }
 
-  // Unlock process
+  // Unlock process - feeds master password securely over stdin pipe, never via argv
   Process {
     id: unlockProc
+    property string _masterPassword: ""
     property var _callback: null
+    stdinEnabled: true
+
+    onStarted: {
+      write(_masterPassword + "\n");
+      _masterPassword = ""; // zero out immediately
+    }
+
     stdout: StdioCollector {
       id: unlockStdout
       waitForEnd: true
@@ -400,6 +413,7 @@ Item {
     }
     onExited: function(exitCode) {
       root.syncing = false;
+      _masterPassword = "";
       if (exitCode === 0) {
         root.locked = false;
         root.errorMessage = "";
@@ -415,7 +429,7 @@ Item {
     }
   }
 
-  // Lock process
+  // Lock process - wipes memory and scrubs clipboard
   Process {
     id: lockProc
     command: Model.lockCommand()
@@ -428,6 +442,16 @@ Item {
       root.filteredItems = [];
       root.selectedItem = null;
       root.currentTotp = null;
+      root.searchQuery = "";
+      root.lastCopiedPassword = "";
+      root.pendingTotpCopy = "";
+      autoCopyTotpTimer.stop();
+      clipboardClearTimer.stop();
+
+      // Immediately purge clipboard on lock
+      clearClipboardProc.command = Model.clearClipboardCommand();
+      clearClipboardProc.running = true;
+
       root.notifyViews("Vault locked");
     }
   }
@@ -461,6 +485,17 @@ Item {
       root.allItems = [];
       root.filteredItems = [];
       root.selectedItem = null;
+      root.currentTotp = null;
+      root.searchQuery = "";
+      root.lastCopiedPassword = "";
+      root.pendingTotpCopy = "";
+      autoCopyTotpTimer.stop();
+      clipboardClearTimer.stop();
+
+      // Immediately purge clipboard on logout
+      clearClipboardProc.command = Model.clearClipboardCommand();
+      clearClipboardProc.running = true;
+
       root.notifyViews("Logged out of Dashlane");
     }
   }
@@ -479,9 +514,54 @@ Item {
     }
   }
 
+  // Screen lock monitoring process
+  Process {
+    id: screenLockProc
+    command: Model.screenLockStateCommand()
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (Model.screenIsLocked(text) && root.lockOnScreenLock && !root.locked && root.loggedIn) {
+          root.lockVault();
+        }
+      }
+    }
+  }
+
+  // System sleep/suspend monitor process
+  Process {
+    id: sleepMonitorProc
+    command: Model.sleepMonitorCommand()
+    stdout: SplitParser {
+      onRead: function(line) {
+        if (root.lockOnSuspend && !root.locked && root.loggedIn) {
+          root.lockVault();
+        }
+      }
+    }
+  }
+
+  // Hardware entropy feeder process for CSPRNG
+  Process {
+    id: entropyProc
+    command: ["sh", "-c", "head -c 128 /dev/urandom | od -An -tu4 -v | tr -s ' ' '\n' | grep -v '^$' | head -n 32"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var lines = text.trim().split(/\s+/);
+        var ints = [];
+        for (var i = 0; i < lines.length; i++) {
+          var n = parseInt(lines[i], 10);
+          if (!isNaN(n)) ints.push(n);
+        }
+        Model.feedEntropy(ints);
+      }
+    }
+  }
+
   // Clipboard operations
   Process { id: copyProc }
-  Process { id: clearClipboardProc; command: Model.clearClipboardCommand() }
+  Process { id: clearClipboardProc }
   Process { id: openUrlProc }
   Process { id: terminalSyncProc }
   Process { id: terminalInstallProc }
@@ -512,12 +592,27 @@ Item {
     }
   }
 
+  // Screen lock poll timer (polls every 3 seconds while vault is unlocked)
+  Timer {
+    id: screenLockPollTimer
+    interval: 3000
+    repeat: true
+    running: root.lockOnScreenLock && !root.locked && root.loggedIn
+    onTriggered: {
+      if (!screenLockProc.running) {
+        screenLockProc.running = true;
+      }
+    }
+  }
+
   // Clipboard auto-clear timer
   Timer {
     id: clipboardClearTimer
     repeat: false
     onTriggered: {
+      clearClipboardProc.command = Model.clearClipboardCommand(root.lastCopiedPassword);
       clearClipboardProc.running = true;
+      root.lastCopiedPassword = "";
       root.notifyViews("Clipboard cleared");
     }
   }
@@ -551,7 +646,18 @@ Item {
     onTriggered: root.refreshStatus()
   }
 
+  onLockedChanged: {
+    if (!locked && loggedIn && lockOnSuspend) {
+      if (!sleepMonitorProc.running) {
+        sleepMonitorProc.running = true;
+      }
+    } else {
+      sleepMonitorProc.running = false;
+    }
+  }
+
   Component.onCompleted: {
     refreshStatus();
+    replenishEntropy();
   }
 }

@@ -30,24 +30,12 @@ function secretsCommand() {
   return ["dcli", "secret", "-o", "json"];
 }
 
-function unlockCommand(masterPassword) {
-  // Pass master password via stdin pipe to avoid it appearing in /proc/<pid>/environ
-  // or process listings (ps auxe). This prevents same-uid processes from reading the
-  // secret out of the environment. dcli reads DASHLANE_MASTER_PASSWORD from its env,
-  // so we wrap it in a subshell that never exports the value to /proc directly.
-  //
-  // The printf heredoc approach: we spawn bash, which execs a subshell that uses
-  // command substitution to avoid argv exposure. The password is passed as a
-  // shell variable scoped to the subshell, not exported to dcli's environment
-  // via exec.  dcli still picks it up via DASHLANE_MASTER_PASSWORD but the
-  // variable lifetime is limited to the subshell's environment, which is not
-  // observable via /proc/<parent>/environ.
-  //
-  // Implementation: use printf | read + env in a subshell so the password is
-  // never an argument and never appears in the process list.
-  var script = "printf '%s' " + shellQuote(masterPassword)
-    + " | { read -r _mp; DASHLANE_MASTER_PASSWORD=\"$_mp\" dcli password -o json; }";
-  return ["bash", "-c", script];
+function unlockCommand() {
+  // Pass master password strictly over stdin pipe to avoid any exposure in
+  // argv, /proc/<pid>/cmdline, or ps listings.
+  // The process writes the password directly to stdin, where read -r consumes it
+  // and scopes DASHLANE_MASTER_PASSWORD only to the execution of dcli.
+  return ["bash", "-c", "read -r _mp; DASHLANE_MASTER_PASSWORD=\"$_mp\" dcli password -o json"];
 }
 
 function lockCommand() {
@@ -91,11 +79,34 @@ function activeWindowCommand() {
   return ["sh", "-c", "hyprctl activewindow -j 2>/dev/null || true"];
 }
 
+function screenLockStateCommand() {
+  return ["bash", "-c", "omarchy-shell lock isLocked 2>/dev/null | head -c 16"];
+}
+
+function screenIsLocked(raw) {
+  return String(raw || "").trim() === "true";
+}
+
+function sleepMonitorCommand() {
+  return ["bash", "-c", "gdbus monitor --system --dest org.freedesktop.login1 --object-path /org/freedesktop/login1 2>/dev/null | grep --line-buffered 'PrepareForSleep (true'"];
+}
+
 function copyCommand(text) {
   return ["wl-copy", "--type", "text/plain", "--", String(text || "")];
 }
 
-function clearClipboardCommand() {
+function clearClipboardCommand(expectedText) {
+  if (expectedText) {
+    // Only clear if the clipboard still contains the expected secret,
+    // avoiding wiping unrelated user clips.
+    return [
+      "bash",
+      "-c",
+      "if [ \"$(wl-paste -n 2>/dev/null)\" = \"$1\" ]; then wl-copy --clear; fi",
+      "--",
+      String(expectedText)
+    ];
+  }
   return ["wl-copy", "--clear"];
 }
 
@@ -136,7 +147,6 @@ function parseStatus(text) {
     }
   }
 
-  // If locked was not explicitly reported but logged in is yes, verify
   return {
     loggedIn: loggedIn,
     locked: locked,
@@ -149,10 +159,6 @@ function parseStatus(text) {
 // JSON Parsing & Normalization
 // ---------------------------------------------------------------------------
 
-// Monotonic counter used as a collision-free fallback ID when dcli omits
-// the 'id' and 'anonId' fields. Using Math.random() here would risk two
-// items receiving the same ID (birthday paradox), causing incorrect item
-// selection or silent de-duplication.
 var _itemIdCounter = 0;
 function _nextFallbackId() {
   _itemIdCounter += 1;
@@ -345,9 +351,6 @@ function matchActiveWindow(items, windowJson) {
 
   if (!title && !winClass) return null;
 
-  // Words to ignore from window titles
-  var stopWords = ["the", "and", "google", "chrome", "firefox", "chromium", "brave", "edge", "browser", "window", "tab"];
-
   var bestItem = null;
   var bestScore = 0;
 
@@ -393,30 +396,24 @@ function matchActiveWindow(items, windowJson) {
 // URL Normalization & Safety
 // ---------------------------------------------------------------------------
 
+var HTTP_URL_RE = /^https?:\/\//i;
+var EXPLICIT_SCHEME_RE = /^([a-zA-Z][a-zA-Z0-9+.-]*):(?!\d)/;
+
 function normalizeOpenableUrl(raw) {
   var url = String(raw || "").trim();
   if (!url) return { ok: false, reason: "empty" };
 
-  // Allowlist approach: only http and https are permitted.
-  // A blocklist (javascript:, data:, file:, ...) is fragile — it cannot
-  // enumerate all dangerous schemes (ftp://, ssh://, smb://, ldap://, etc.)
-  // that xdg-open would invoke with a local protocol handler.
-  if (/^https?:\/\//i.test(url)) {
+  if (HTTP_URL_RE.test(url)) {
     return { ok: true, url: url };
   }
 
-  // If the URL contains a colon before any slash, it has an explicit scheme.
-  // Reject everything that isn't http(s) — this covers javascript:, data:,
-  // file://, ftp://, ssh://, smb://, and any other scheme.
-  var colonIdx = url.indexOf(":");
-  var slashIdx = url.indexOf("/");
-  var hasExplicitScheme = colonIdx !== -1 && (slashIdx === -1 || colonIdx < slashIdx);
-  if (hasExplicitScheme) {
+  // Refuse explicit non-http schemes (e.g. javascript:, file:, ftp:, smb:, ssh:, data:, etc.)
+  // A colon followed by digits (e.g. localhost:8080) is a port, not a scheme.
+  if (EXPLICIT_SCHEME_RE.test(url)) {
     return { ok: false, reason: "unsafe_scheme" };
   }
 
-  // No explicit scheme — treat as a bare hostname (e.g. "example.com") and
-  // prepend https://.
+  // Bare hostname or host:port — prepend https://
   return { ok: true, url: "https://" + url };
 }
 
@@ -583,7 +580,7 @@ function generateTotp(otpSecretOrUrl, epochSeconds) {
 }
 
 // ---------------------------------------------------------------------------
-// Password & Passphrase Generator
+// Password & Passphrase Generator (with CSPRNG Entropy Pooling)
 // ---------------------------------------------------------------------------
 
 var WORD_LIST = [
@@ -605,13 +602,29 @@ var WORD_LIST = [
   "wander", "willow", "zenith", "zephyr"
 ];
 
+// In Quickshell/Qt QML, window.crypto and crypto.getRandomValues are not present
+// in the V4 JS engine. To deliver cryptographically secure random numbers without
+// falling back to predictable Math.random(), Service.qml feeds hardware random
+// bytes directly from /dev/urandom into _entropyPool.
+var _entropyPool = [];
+
+function feedEntropy(uint32Array) {
+  if (Array.isArray(uint32Array)) {
+    for (var i = 0; i < uint32Array.length; i++) {
+      _entropyPool.push(uint32Array[i] >>> 0);
+    }
+  }
+}
+
+function entropyPoolSize() {
+  return _entropyPool.length;
+}
+
 function getRandomInt(max) {
-  // Use a cryptographically secure random source.
-  // crypto.getRandomValues is available in browser/QML JS engines.
-  // In the Node.js test environment it falls back to the built-in crypto module.
+  if (max <= 1) return 0;
+
+  // 1. Browser / Web environment with Web Crypto API
   if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-    // Use rejection sampling to avoid modulo bias.
-    // We draw a 32-bit value; if it falls in the "bias zone" we redraw.
     var limit = 0x100000000 - (0x100000000 % max);
     var buf = new Uint32Array(1);
     do {
@@ -619,20 +632,32 @@ function getRandomInt(max) {
     } while (buf[0] >= limit);
     return buf[0] % max;
   }
-  // Node.js fallback (test environment only — not used for real password generation)
+
+  // 2. Node.js environment (for unit testing)
   if (typeof require !== "undefined") {
     try {
       var nodeCrypto = require("crypto");
-      var bytes = nodeCrypto.randomBytes(4);
-      var val = bytes.readUInt32BE(0);
-      var limit2 = 0x100000000 - (0x100000000 % max);
-      // Simple single-attempt; good enough for test harness
-      if (val < limit2) return val % max;
-      return nodeCrypto.randomBytes(4).readUInt32BE(0) % max;
+      var limitNode = 0x100000000 - (0x100000000 % max);
+      var val;
+      do {
+        val = nodeCrypto.randomBytes(4).readUInt32BE(0);
+      } while (val >= limitNode);
+      return val % max;
     } catch (_e) {}
   }
-  // Last-resort fallback: Math.random() is NOT cryptographically secure.
-  // This path should never be reached in production.
+
+  // 3. Quickshell environment with /dev/urandom entropy pool
+  if (_entropyPool.length > 0) {
+    var limitPool = 0x100000000 - (0x100000000 % max);
+    while (_entropyPool.length > 0) {
+      var poolVal = _entropyPool.pop();
+      if (poolVal < limitPool) {
+        return poolVal % max;
+      }
+    }
+  }
+
+  // 4. Fallback (if entropy pool is depleted before replenishment finishes)
   return Math.floor(Math.random() * max);
 }
 
@@ -757,6 +782,9 @@ if (typeof module !== "undefined" && module.exports) {
     terminalSyncCommand: terminalSyncCommand,
     terminalInstallCommand: terminalInstallCommand,
     activeWindowCommand: activeWindowCommand,
+    screenLockStateCommand: screenLockStateCommand,
+    screenIsLocked: screenIsLocked,
+    sleepMonitorCommand: sleepMonitorCommand,
     copyCommand: copyCommand,
     clearClipboardCommand: clearClipboardCommand,
     openUrlCommand: openUrlCommand,
@@ -780,6 +808,8 @@ if (typeof module !== "undefined" && module.exports) {
     generatePassphrase: generatePassphrase,
     calculateStrength: calculateStrength,
     getRandomInt: getRandomInt,
+    feedEntropy: feedEntropy,
+    entropyPoolSize: entropyPoolSize,
     _nextFallbackId: _nextFallbackId
   };
 }

@@ -43,6 +43,9 @@ Panel {
   property string generatorSeparator: "-"
 
   function regeneratePassword() {
+    if (vault && typeof vault.replenishEntropy === "function") {
+      vault.replenishEntropy();
+    }
     if (generatorPassphraseMode) {
       generatorPassword = Model.generatePassphrase({
         wordCount: generatorWordCount,
