@@ -88,7 +88,7 @@ Panel {
       } else if (item.type === "secret") {
         vault.copyText(item.password, "secret for " + item.title, true);
       } else if (item.type === "note") {
-        vault.copyText(item.note, "note for " + item.title, false);
+        vault.copyText(item.note, "note for " + item.title, true);
       }
     }
   }
@@ -844,7 +844,7 @@ Panel {
                   iconText: "󰈔"
                   onClicked: {
                     var c = vault.selectedItem.content || vault.selectedItem.note;
-                    vault.copyText(c, "content for " + vault.selectedItem.title, false);
+                    vault.copyText(c, "content for " + vault.selectedItem.title, true);
                   }
                 }
               }
@@ -1361,7 +1361,7 @@ Panel {
                         } else if (modelData.type === "secret") {
                           vault.copyText(modelData.password, "secret for " + modelData.title, true);
                         } else {
-                          vault.copyText(modelData.note, "note for " + modelData.title, false);
+                          vault.copyText(modelData.note, "note for " + modelData.title, true);
                         }
                       }
                     }

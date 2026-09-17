@@ -391,16 +391,18 @@ Item {
     }
   }
 
-  // Unlock process - feeds master password securely over stdin pipe, never via argv
+  // Unlock process - feeds master password securely via scoped child process environment
   Process {
     id: unlockProc
     property string _masterPassword: ""
     property var _callback: null
-    stdinEnabled: true
+    command: Model.unlockCommand()
+    environment: ({
+      "DASHLANE_MASTER_PASSWORD": _masterPassword
+    })
 
     onStarted: {
-      write(_masterPassword + "\n");
-      _masterPassword = ""; // zero out immediately
+      _masterPassword = ""; // zero out immediately once child process is spawned
     }
 
     stdout: StdioCollector {
@@ -422,7 +424,7 @@ Item {
         if (_callback) _callback(true, "");
         root.notifyViews("Vault unlocked");
       } else {
-        var err = unlockStderr.text.trim() || "Incorrect master password.";
+        var err = Model.sanitizeUnlockError(unlockStderr.text, exitCode);
         root.errorMessage = err;
         if (_callback) _callback(false, err);
       }

@@ -31,11 +31,80 @@ function secretsCommand() {
 }
 
 function unlockCommand() {
-  // Pass master password strictly over stdin pipe to avoid any exposure in
-  // argv, /proc/<pid>/cmdline, or ps listings.
-  // The process writes the password directly to stdin, where read -r consumes it
-  // and scopes DASHLANE_MASTER_PASSWORD only to the execution of dcli.
-  return ["bash", "-c", "read -r _mp; DASHLANE_MASTER_PASSWORD=\"$_mp\" dcli password -o json"];
+  // Invokes dcli directly without intermediate bash wrapper or shell script.
+  // The master password is provided directly to the child process via Quickshell's
+  // per-process 'environment' property (QProcess::setProcessEnvironment), ensuring
+  // that argv and /proc/<pid>/cmdline contain only ["dcli", "password", "-o", "json"].
+  return ["dcli", "password", "-o", "json"];
+}
+
+function sanitizeUnlockError(rawStderr, exitCode) {
+  var raw = String(rawStderr || "").trim();
+  if (!raw) {
+    return "Incorrect master password.";
+  }
+
+  var lower = raw.toLowerCase();
+
+  // 1. Password or decryption failures
+  if (
+    lower.includes("password") ||
+    lower.includes("incorrect") ||
+    lower.includes("invalid master") ||
+    lower.includes("authentication failed") ||
+    lower.includes("auth failed") ||
+    lower.includes("decrypt") ||
+    lower.includes("credential")
+  ) {
+    return "Incorrect master password.";
+  }
+
+  // 2. Device registration or unauthenticated sessions
+  if (
+    lower.includes("device") ||
+    lower.includes("not registered") ||
+    lower.includes("not logged in") ||
+    lower.includes("session expired") ||
+    lower.includes("unauthenticated") ||
+    lower.includes("unauthorized")
+  ) {
+    return "Dashlane session expired or device not registered. Run 'dcli login' in terminal.";
+  }
+
+  // 3. Network / communication issues
+  if (
+    lower.includes("network") ||
+    lower.includes("connect") ||
+    lower.includes("econnrefused") ||
+    lower.includes("timeout") ||
+    lower.includes("fetch failed") ||
+    lower.includes("dns")
+  ) {
+    return "Network error communicating with Dashlane servers.";
+  }
+
+  // 4. Rate limiting or lockouts
+  if (
+    lower.includes("rate limit") ||
+    lower.includes("too many") ||
+    lower.includes("throttle") ||
+    lower.includes("locked out")
+  ) {
+    return "Too many failed attempts. Please try again later.";
+  }
+
+  // 5. Binary not found or execution failure
+  if (
+    lower.includes("command not found") ||
+    lower.includes("not found") ||
+    lower.includes("enoent") ||
+    exitCode === 127
+  ) {
+    return "Dashlane CLI (dcli) could not be executed. Please verify your installation.";
+  }
+
+  // Generic fallback: strictly avoid leaking file paths, tracebacks, or raw codes
+  return "Failed to unlock vault. Please check your credentials or CLI status.";
 }
 
 function lockCommand() {
@@ -776,6 +845,7 @@ if (typeof module !== "undefined" && module.exports) {
     notesCommand: notesCommand,
     secretsCommand: secretsCommand,
     unlockCommand: unlockCommand,
+    sanitizeUnlockError: sanitizeUnlockError,
     lockCommand: lockCommand,
     syncCommand: syncCommand,
     logoutCommand: logoutCommand,

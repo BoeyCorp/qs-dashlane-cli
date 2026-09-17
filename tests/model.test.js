@@ -12,14 +12,9 @@ test("CLI command generation", () => {
   assert.deepStrictEqual(Model.syncCommand(), ["dcli", "sync"]);
   assert.deepStrictEqual(Model.logoutCommand(), ["dcli", "logout"]);
 
-  // unlockCommand must never take password as argument or expose in cmdline
+  // unlockCommand executes dcli directly without shell wrappers or argv leakage
   const unlockCmd = Model.unlockCommand();
-  assert.strictEqual(unlockCmd[0], "bash");
-  assert.strictEqual(unlockCmd[1], "-c");
-  assert.ok(unlockCmd[2].includes("read -r _mp;"));
-  assert.ok(unlockCmd[2].includes("DASHLANE_MASTER_PASSWORD=\"$_mp\" dcli password -o json"));
-  // Ensure no hardcoded password or printf in argv
-  assert.ok(!unlockCmd[2].includes("printf"));
+  assert.deepStrictEqual(unlockCmd, ["dcli", "password", "-o", "json"]);
 
   // Lock and sleep monitor commands
   assert.deepStrictEqual(Model.screenLockStateCommand(), ["bash", "-c", "omarchy-shell lock isLocked 2>/dev/null | head -c 16"]);
@@ -207,3 +202,59 @@ test("URL normalization, ports, and scheme security", () => {
   assert.strictEqual(Model.normalizeOpenableUrl("data:text/html,evil").ok, false);
   assert.strictEqual(Model.normalizeOpenableUrl("smb://nas/share").ok, false);
 });
+
+test("Unlock error message sanitization", () => {
+  // Authentication failure
+  assert.strictEqual(
+    Model.sanitizeUnlockError("Error: Invalid master password"),
+    "Incorrect master password."
+  );
+  assert.strictEqual(
+    Model.sanitizeUnlockError("decryption failed: bad key"),
+    "Incorrect master password."
+  );
+  assert.strictEqual(
+    Model.sanitizeUnlockError(""),
+    "Incorrect master password."
+  );
+
+  // Device registration / session expiration
+  assert.strictEqual(
+    Model.sanitizeUnlockError("Device not registered"),
+    "Dashlane session expired or device not registered. Run 'dcli login' in terminal."
+  );
+  assert.strictEqual(
+    Model.sanitizeUnlockError("User is unauthorized or unauthenticated"),
+    "Dashlane session expired or device not registered. Run 'dcli login' in terminal."
+  );
+
+  // Network error
+  assert.strictEqual(
+    Model.sanitizeUnlockError("fetch failed: ECONNREFUSED"),
+    "Network error communicating with Dashlane servers."
+  );
+
+  // Rate limiting
+  assert.strictEqual(
+    Model.sanitizeUnlockError("Rate limit exceeded: too many requests"),
+    "Too many failed attempts. Please try again later."
+  );
+
+  // Missing CLI binary
+  assert.strictEqual(
+    Model.sanitizeUnlockError("bash: dcli: command not found", 127),
+    "Dashlane CLI (dcli) could not be executed. Please verify your installation."
+  );
+
+  // Internal path / stack trace sanitization (prevents leaking filesystem paths or internals)
+  const stackTrace = `Error: SQLite error
+    at Object.openSync (node:fs:580:18)
+    at /home/boey/.config/dashlane/vault.db
+    at Session.validate (/usr/lib/node_modules/@dashlane/cli/index.js:12:4)`;
+  const sanitized = Model.sanitizeUnlockError(stackTrace);
+  assert.strictEqual(sanitized, "Failed to unlock vault. Please check your credentials or CLI status.");
+  assert.ok(!sanitized.includes("/home/boey"));
+  assert.ok(!sanitized.includes("node:fs"));
+  assert.ok(!sanitized.includes("SQLite"));
+});
+
