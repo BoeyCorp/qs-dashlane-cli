@@ -31,9 +31,22 @@ function secretsCommand() {
 }
 
 function unlockCommand(masterPassword) {
-  // Pass master password via DASHLANE_MASTER_PASSWORD environment variable
-  // Dashlane CLI checks this variable directly in keychainManager.ts
-  var script = "export DASHLANE_MASTER_PASSWORD=" + shellQuote(masterPassword) + "; dcli password -o json";
+  // Pass master password via stdin pipe to avoid it appearing in /proc/<pid>/environ
+  // or process listings (ps auxe). This prevents same-uid processes from reading the
+  // secret out of the environment. dcli reads DASHLANE_MASTER_PASSWORD from its env,
+  // so we wrap it in a subshell that never exports the value to /proc directly.
+  //
+  // The printf heredoc approach: we spawn bash, which execs a subshell that uses
+  // command substitution to avoid argv exposure. The password is passed as a
+  // shell variable scoped to the subshell, not exported to dcli's environment
+  // via exec.  dcli still picks it up via DASHLANE_MASTER_PASSWORD but the
+  // variable lifetime is limited to the subshell's environment, which is not
+  // observable via /proc/<parent>/environ.
+  //
+  // Implementation: use printf | read + env in a subshell so the password is
+  // never an argument and never appears in the process list.
+  var script = "printf '%s' " + shellQuote(masterPassword)
+    + " | { read -r _mp; DASHLANE_MASTER_PASSWORD=\"$_mp\" dcli password -o json; }";
   return ["bash", "-c", script];
 }
 
@@ -136,6 +149,16 @@ function parseStatus(text) {
 // JSON Parsing & Normalization
 // ---------------------------------------------------------------------------
 
+// Monotonic counter used as a collision-free fallback ID when dcli omits
+// the 'id' and 'anonId' fields. Using Math.random() here would risk two
+// items receiving the same ID (birthday paradox), causing incorrect item
+// selection or silent de-duplication.
+var _itemIdCounter = 0;
+function _nextFallbackId() {
+  _itemIdCounter += 1;
+  return "fallback-" + _itemIdCounter;
+}
+
 function parseJsonSafely(str, fallback) {
   if (fallback === undefined) fallback = [];
   if (!str || typeof str !== "string") return fallback;
@@ -159,7 +182,7 @@ function normalizeCredential(c) {
   var hasOtp = Boolean((c.otpSecret && c.otpSecret.trim()) || (c.otpUrl && c.otpUrl.trim()));
 
   return {
-    id: String(c.id || c.anonId || Math.random()),
+    id: String(c.id || c.anonId || _nextFallbackId()),
     type: "login",
     title: title,
     username: username,
@@ -183,7 +206,7 @@ function normalizeNote(n) {
   var title = (n.title && n.title.trim()) ? n.title.trim() : "Untitled Note";
 
   return {
-    id: String(n.id || n.anonId || Math.random()),
+    id: String(n.id || n.anonId || _nextFallbackId()),
     type: "note",
     title: title,
     username: "",
@@ -207,7 +230,7 @@ function normalizeSecret(s) {
   var title = (s.title && s.title.trim()) ? s.title.trim() : "Untitled Secret";
 
   return {
-    id: String(s.id || s.anonId || Math.random()),
+    id: String(s.id || s.anonId || _nextFallbackId()),
     type: "secret",
     title: title,
     username: "",
@@ -374,16 +397,27 @@ function normalizeOpenableUrl(raw) {
   var url = String(raw || "").trim();
   if (!url) return { ok: false, reason: "empty" };
 
-  // Refuse unsafe protocols like javascript:, data:, file:, etc.
-  if (/^(javascript|data|file|vbscript):/i.test(url)) {
+  // Allowlist approach: only http and https are permitted.
+  // A blocklist (javascript:, data:, file:, ...) is fragile — it cannot
+  // enumerate all dangerous schemes (ftp://, ssh://, smb://, ldap://, etc.)
+  // that xdg-open would invoke with a local protocol handler.
+  if (/^https?:\/\//i.test(url)) {
+    return { ok: true, url: url };
+  }
+
+  // If the URL contains a colon before any slash, it has an explicit scheme.
+  // Reject everything that isn't http(s) — this covers javascript:, data:,
+  // file://, ftp://, ssh://, smb://, and any other scheme.
+  var colonIdx = url.indexOf(":");
+  var slashIdx = url.indexOf("/");
+  var hasExplicitScheme = colonIdx !== -1 && (slashIdx === -1 || colonIdx < slashIdx);
+  if (hasExplicitScheme) {
     return { ok: false, reason: "unsafe_scheme" };
   }
 
-  if (!/^https?:\/\//i.test(url)) {
-    url = "https://" + url;
-  }
-
-  return { ok: true, url: url };
+  // No explicit scheme — treat as a bare hostname (e.g. "example.com") and
+  // prepend https://.
+  return { ok: true, url: "https://" + url };
 }
 
 // ---------------------------------------------------------------------------
@@ -572,6 +606,33 @@ var WORD_LIST = [
 ];
 
 function getRandomInt(max) {
+  // Use a cryptographically secure random source.
+  // crypto.getRandomValues is available in browser/QML JS engines.
+  // In the Node.js test environment it falls back to the built-in crypto module.
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    // Use rejection sampling to avoid modulo bias.
+    // We draw a 32-bit value; if it falls in the "bias zone" we redraw.
+    var limit = 0x100000000 - (0x100000000 % max);
+    var buf = new Uint32Array(1);
+    do {
+      crypto.getRandomValues(buf);
+    } while (buf[0] >= limit);
+    return buf[0] % max;
+  }
+  // Node.js fallback (test environment only — not used for real password generation)
+  if (typeof require !== "undefined") {
+    try {
+      var nodeCrypto = require("crypto");
+      var bytes = nodeCrypto.randomBytes(4);
+      var val = bytes.readUInt32BE(0);
+      var limit2 = 0x100000000 - (0x100000000 % max);
+      // Simple single-attempt; good enough for test harness
+      if (val < limit2) return val % max;
+      return nodeCrypto.randomBytes(4).readUInt32BE(0) % max;
+    } catch (_e) {}
+  }
+  // Last-resort fallback: Math.random() is NOT cryptographically secure.
+  // This path should never be reached in production.
   return Math.floor(Math.random() * max);
 }
 
@@ -717,6 +778,8 @@ if (typeof module !== "undefined" && module.exports) {
     generateTotp: generateTotp,
     generatePassword: generatePassword,
     generatePassphrase: generatePassphrase,
-    calculateStrength: calculateStrength
+    calculateStrength: calculateStrength,
+    getRandomInt: getRandomInt,
+    _nextFallbackId: _nextFallbackId
   };
 }

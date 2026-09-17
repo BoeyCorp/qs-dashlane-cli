@@ -198,12 +198,17 @@ Item {
     copyProc.command = Model.copyCommand(text);
     copyProc.running = true;
 
+    // Auto-clear the clipboard for all vault content, not just passwords/secrets.
+    // Secure notes commonly contain API keys, recovery codes, and private keys,
+    // so treating them as non-sensitive was a security oversight.
+    // We use clearClipboardSec for all vault data and only track the
+    // lastCopiedPassword for the auto-TOTP follow-up flow.
     if (isSecret) {
       lastCopiedPassword = text;
-      if (clearClipboardSec > 0) {
-        clipboardClearTimer.interval = clearClipboardSec * 1000;
-        clipboardClearTimer.restart();
-      }
+    }
+    if (clearClipboardSec > 0) {
+      clipboardClearTimer.interval = clearClipboardSec * 1000;
+      clipboardClearTimer.restart();
     }
 
     notifyViews("Copied " + (label || "text") + " to clipboard");

@@ -542,10 +542,10 @@ Panel {
               password: true
               placeholderText: "Enter Master Password..."
               onAccepted: {
-                vault.unlockVault(text, function(success, err) {
-                  if (success) {
-                    text = "";
-                  }
+                var pw = text;
+                text = "";   // clear unconditionally — do not retain password on failed attempts
+                vault.unlockVault(pw, function(success, err) {
+                  // field already cleared; nothing more to do
                 });
               }
             }
@@ -568,10 +568,10 @@ Panel {
               bordered: true
               accent: Color.accent
               onClicked: {
-                vault.unlockVault(unlockPasswordField.text, function(success, err) {
-                  if (success) {
-                    unlockPasswordField.text = "";
-                  }
+                var pw = unlockPasswordField.text;
+                unlockPasswordField.text = "";   // clear unconditionally
+                vault.unlockVault(pw, function(success, err) {
+                  // field already cleared; nothing more to do
                 });
               }
             }
