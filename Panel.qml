@@ -253,7 +253,7 @@ Panel {
             Text {
               text: "󰑐"
               font.family: Style.font.family
-              font.pixelSize: Style.font.small
+              font.pixelSize: Style.font.iconSmall
               color: Color.accent
               visible: vault && vault.syncing
               RotationAnimation on rotation {
@@ -346,7 +346,7 @@ Panel {
               Text {
                 text: "󰄬"
                 font.family: Style.font.family
-                font.pixelSize: Style.font.small
+                font.pixelSize: Style.font.iconSmall
                 color: Color.accent
               }
 
