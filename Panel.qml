@@ -163,6 +163,7 @@ Panel {
     onOpenChanged: {
       if (open && vault) {
         vault.touchActivity();
+        vault.refreshStatus();   // re-check dcli status every open (picks up post-terminal-auth)
         vault.checkActiveWindow();
         if (generatorPassword === "") {
           regeneratePassword();
@@ -862,6 +863,15 @@ Panel {
               spacing: Style.space(12)
               visible: vault && vault.selectedItem === null && vault.activeTab === "generator"
 
+              // Back button
+              Button {
+                text: "Back to vault"
+                iconText: "󰅁"
+                onClicked: vault.setActiveTab("all")
+              }
+
+              PanelSeparator { width: parent.width }
+
               PanelSectionHeader { text: "PASSWORD GENERATOR" }
 
               // Generated password display card
@@ -1036,6 +1046,15 @@ Panel {
               width: parent.width
               spacing: Style.space(12)
               visible: vault && vault.selectedItem === null && vault.activeTab === "settings"
+
+              // Back button
+              Button {
+                text: "Back to vault"
+                iconText: "󰅁"
+                onClicked: vault.setActiveTab("all")
+              }
+
+              PanelSeparator { width: parent.width }
 
               PanelSectionHeader { text: "VAULT SETTINGS" }
 
