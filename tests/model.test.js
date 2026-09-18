@@ -24,7 +24,15 @@ test("CLI command generation", () => {
   assert.ok(sleepCmd[2].includes("gdbus monitor"));
   assert.ok(sleepCmd[2].includes("exit 0"));
 
-  // Clipboard clear commands - must use environment variable, never argv
+  // Clipboard copy and clear commands - must use environment variable, never argv
+  const copyCmd = Model.copyCommand();
+  assert.strictEqual(copyCmd[0], "bash");
+  assert.strictEqual(copyCmd[1], "-c");
+  assert.ok(copyCmd[2].includes("CLIPBOARD_TEXT"));
+  assert.ok(copyCmd[2].includes("wl-copy"));
+  assert.ok(copyCmd[2].includes("--sensitive"));
+  assert.strictEqual(copyCmd.length, 3); // Fixed 3 elements, no extra argv arguments or plaintext secrets
+
   const clearCmd = Model.clearClipboardCommand();
   assert.strictEqual(clearCmd[0], "bash");
   assert.strictEqual(clearCmd[1], "-c");

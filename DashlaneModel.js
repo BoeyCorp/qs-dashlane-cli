@@ -177,8 +177,15 @@ function sleepMonitorCommand() {
   ];
 }
 
-function copyCommand(text) {
-  return ["wl-copy", "--type", "text/plain", "--", String(text || "")];
+function copyCommand() {
+  // Pipes secret text directly from scoped environment into wl-copy stdin,
+  // preventing any exposure in argv or /proc/<pid>/cmdline.
+  // Uses --sensitive flag to prevent Wayland clipboard history daemons from persisting secrets.
+  return [
+    "bash",
+    "-c",
+    "printf '%s' \"$CLIPBOARD_TEXT\" | wl-copy --type text/plain --sensitive"
+  ];
 }
 
 function clearClipboardCommand() {

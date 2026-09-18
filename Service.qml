@@ -199,7 +199,7 @@ Item {
   function copyText(text, label, isSecret) {
     if (!text) return;
     touchActivity();
-    copyProc.command = Model.copyCommand(text);
+    copyProc._textToCopy = String(text);
     copyProc.running = true;
 
     // Track secret text so clipboard auto-clearing can target only this value
@@ -568,7 +568,20 @@ Item {
   }
 
   // Clipboard operations
-  Process { id: copyProc }
+  Process {
+    id: copyProc
+    property string _textToCopy: ""
+    command: Model.copyCommand()
+    environment: ({
+      "CLIPBOARD_TEXT": _textToCopy
+    })
+    onStarted: {
+      _textToCopy = ""; // zero out immediately upon process launch
+    }
+    onExited: {
+      _textToCopy = "";
+    }
+  }
   Process {
     id: clearClipboardProc
     property string _expectedSecret: ""
