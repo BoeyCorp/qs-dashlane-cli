@@ -39,6 +39,15 @@ test("CLI command generation", () => {
   assert.ok(clearCmd[2].includes("EXPECTED_SECRET"));
   assert.ok(clearCmd[2].includes("wl-copy --clear"));
   assert.strictEqual(clearCmd.length, 3); // Fixed 3 elements, no extra argv arguments
+
+  // Terminal commands use absolute binary paths
+  const termSync = Model.terminalSyncCommand();
+  assert.ok(termSync[2].includes("/usr/bin/omarchy"));
+  assert.ok(termSync[2].includes("/usr/bin/alacritty"));
+
+  const termInstall = Model.terminalInstallCommand();
+  assert.ok(termInstall[2].includes("/usr/bin/omarchy"));
+  assert.ok(termInstall[2].includes("/usr/bin/alacritty"));
 });
 
 test("parseStatus handles different outputs", () => {
@@ -187,6 +196,10 @@ test("Password and Passphrase generation with entropy pool", () => {
   const pass = Model.generatePassphrase({ wordCount: 4, separator: "-" });
   const words = pass.split("-");
   assert.strictEqual(words.length, 4);
+
+  // Test clearEntropyPool
+  Model.clearEntropyPool();
+  assert.strictEqual(Model.entropyPoolSize(), 0);
 });
 
 test("Active window matching", () => {
@@ -299,5 +312,17 @@ test("Unlock error message sanitization", () => {
   assert.ok(!sanitized.includes("/home/boey"));
   assert.ok(!sanitized.includes("node:fs"));
   assert.ok(!sanitized.includes("SQLite"));
+});
+
+test("Master password validation", () => {
+  assert.strictEqual(Model.validateMasterPassword("").ok, false);
+  assert.strictEqual(Model.validateMasterPassword("   ").ok, false);
+  assert.strictEqual(Model.validateMasterPassword("\t\n  ").ok, false);
+  assert.strictEqual(Model.validateMasterPassword(null).ok, false);
+  assert.strictEqual(Model.validateMasterPassword(undefined).ok, false);
+
+  const valid = Model.validateMasterPassword("correct horse battery staple");
+  assert.strictEqual(valid.ok, true);
+  assert.strictEqual(valid.password, "correct horse battery staple");
 });
 

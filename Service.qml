@@ -160,17 +160,28 @@ Item {
   }
 
   function unlockVault(masterPassword, callback) {
-    if (!masterPassword || masterPassword.length === 0) {
-      errorMessage = "Please enter your master password.";
+    var check = Model.validateMasterPassword(masterPassword);
+    if (!check.ok) {
+      errorMessage = check.error;
       if (callback) callback(false, errorMessage);
       return;
     }
     syncing = true;
     errorMessage = "";
-    unlockProc._masterPassword = masterPassword;
+    unlockProc._masterPassword = check.password;
     unlockProc._callback = callback;
     unlockProc.command = Model.unlockCommand();
     unlockProc.running = true;
+  }
+
+  function triggerClearClipboard(expectedSecret) {
+    if (clearClipboardProc.running) {
+      clearClipboardProc._pendingSecret = expectedSecret;
+      clearClipboardProc._pendingRun = true;
+    } else {
+      clearClipboardProc._expectedSecret = expectedSecret;
+      clearClipboardProc.running = true;
+    }
   }
 
   function lockVault() {
@@ -450,9 +461,9 @@ Item {
       autoCopyTotpTimer.stop();
       clipboardClearTimer.stop();
 
-      // Immediately purge clipboard on lock
-      clearClipboardProc._expectedSecret = "";
-      clearClipboardProc.running = true;
+      // Immediately purge clipboard on lock and zero in-memory entropy pool
+      Model.clearEntropyPool();
+      root.triggerClearClipboard("");
 
       root.notifyViews("Vault locked");
     }
@@ -494,9 +505,9 @@ Item {
       autoCopyTotpTimer.stop();
       clipboardClearTimer.stop();
 
-      // Immediately purge clipboard on logout
-      clearClipboardProc._expectedSecret = "";
-      clearClipboardProc.running = true;
+      // Immediately purge clipboard on logout and zero in-memory entropy pool
+      Model.clearEntropyPool();
+      root.triggerClearClipboard("");
 
       root.notifyViews("Logged out of Dashlane");
     }
@@ -585,6 +596,8 @@ Item {
   Process {
     id: clearClipboardProc
     property string _expectedSecret: ""
+    property bool _pendingRun: false
+    property string _pendingSecret: ""
     command: Model.clearClipboardCommand()
     environment: ({
       "EXPECTED_SECRET": _expectedSecret
@@ -594,6 +607,12 @@ Item {
     }
     onExited: {
       _expectedSecret = "";
+      if (_pendingRun) {
+        _pendingRun = false;
+        _expectedSecret = _pendingSecret;
+        _pendingSecret = "";
+        running = true;
+      }
     }
   }
   Process { id: openUrlProc }
@@ -644,8 +663,7 @@ Item {
     id: clipboardClearTimer
     repeat: false
     onTriggered: {
-      clearClipboardProc._expectedSecret = root.lastCopiedPassword;
-      clearClipboardProc.running = true;
+      root.triggerClearClipboard(root.lastCopiedPassword);
       root.lastCopiedPassword = "";
       root.notifyViews("Clipboard cleared");
     }

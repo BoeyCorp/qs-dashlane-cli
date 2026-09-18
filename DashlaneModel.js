@@ -128,16 +128,26 @@ function logoutCommand() {
   return ["dcli", "logout"];
 }
 
+function validateMasterPassword(raw) {
+  var str = String(raw || "").trim();
+  if (str.length === 0) {
+    return { ok: false, error: "Please enter your master password." };
+  }
+  return { ok: true, password: String(raw) };
+}
+
 function terminalSyncCommand() {
   // Launches terminal for interactive registration/sync/SSO/2FA
   var inner = "echo '=== Dashlane CLI Interactive Sync / Login ==='; "
     + "echo 'If this is your first time, you will be prompted for your email, 2FA, and Master Password.'; "
     + "echo; dcli sync; "
     + "echo; read -p 'Press [Enter] to return to the Omarchy panel...'";
-  var script = "omarchy launch floating terminal with presentation " + shellQuote(inner)
-    + " || omarchy launch terminal -e bash -c " + shellQuote(inner)
-    + " || alacritty -e bash -c " + shellQuote(inner)
-    + " || kitty -e bash -c " + shellQuote(inner);
+  var script = "/usr/bin/omarchy launch floating terminal with presentation " + shellQuote(inner)
+    + " || /usr/bin/omarchy launch terminal -e bash -c " + shellQuote(inner)
+    + " || /usr/bin/alacritty -e bash -c " + shellQuote(inner)
+    + " || /usr/bin/kitty -e bash -c " + shellQuote(inner)
+    + " || /usr/bin/foot -e bash -c " + shellQuote(inner)
+    + " || /usr/bin/ghostty -e bash -c " + shellQuote(inner);
   return ["bash", "-c", script];
 }
 
@@ -148,8 +158,12 @@ function terminalInstallCommand() {
     + "elif which npm >/dev/null 2>&1; then sudo npm install -g @dashlane/cli; "
     + "else echo 'Neither yay, paru, nor npm found. Please install dcli from https://cli.dashlane.com/install'; fi; "
     + "echo; read -p 'Press [Enter] to close...'";
-  var script = "omarchy launch floating terminal with presentation " + shellQuote(inner)
-    + " || omarchy launch terminal -e bash -c " + shellQuote(inner);
+  var script = "/usr/bin/omarchy launch floating terminal with presentation " + shellQuote(inner)
+    + " || /usr/bin/omarchy launch terminal -e bash -c " + shellQuote(inner)
+    + " || /usr/bin/alacritty -e bash -c " + shellQuote(inner)
+    + " || /usr/bin/kitty -e bash -c " + shellQuote(inner)
+    + " || /usr/bin/foot -e bash -c " + shellQuote(inner)
+    + " || /usr/bin/ghostty -e bash -c " + shellQuote(inner);
   return ["bash", "-c", script];
 }
 
@@ -715,6 +729,13 @@ function entropyPoolSize() {
   return _entropyPool.length;
 }
 
+function clearEntropyPool() {
+  for (var i = 0; i < _entropyPool.length; i++) {
+    _entropyPool[i] = 0;
+  }
+  _entropyPool.length = 0;
+}
+
 function hasSecureEntropy() {
   if (typeof crypto !== "undefined" && crypto.getRandomValues) return true;
   if (typeof require !== "undefined") {
@@ -927,8 +948,10 @@ if (typeof module !== "undefined" && module.exports) {
     getRandomInt: getRandomInt,
     feedEntropy: feedEntropy,
     entropyPoolSize: entropyPoolSize,
+    clearEntropyPool: clearEntropyPool,
     hasSecureEntropy: hasSecureEntropy,
     setEntropyReplenishCallback: setEntropyReplenishCallback,
+    validateMasterPassword: validateMasterPassword,
     _nextFallbackId: _nextFallbackId
   };
 }
