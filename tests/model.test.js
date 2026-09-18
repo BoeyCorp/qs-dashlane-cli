@@ -17,10 +17,12 @@ test("CLI command generation", () => {
   assert.deepStrictEqual(unlockCmd, ["dcli", "password", "-o", "json"]);
 
   // Lock and sleep monitor commands
-  assert.deepStrictEqual(Model.screenLockStateCommand(), ["bash", "-c", "omarchy-shell lock isLocked 2>/dev/null | head -c 16"]);
+  assert.deepStrictEqual(Model.screenLockStateCommand(), ["omarchy-shell", "lock", "isLocked"]);
   assert.strictEqual(Model.screenIsLocked("true\n"), true);
   assert.strictEqual(Model.screenIsLocked("false\n"), false);
-  assert.ok(Model.sleepMonitorCommand()[2].includes("gdbus monitor"));
+  const sleepCmd = Model.sleepMonitorCommand();
+  assert.ok(sleepCmd[2].includes("gdbus monitor"));
+  assert.ok(sleepCmd[2].includes("exit 0"));
 
   // Clipboard clear commands - must use environment variable, never argv
   const clearCmd = Model.clearClipboardCommand();
@@ -162,7 +164,17 @@ test("Password and Passphrase generation with entropy pool", () => {
   assert.strictEqual(pwd.length, 24);
   const strength = Model.calculateStrength(pwd);
   assert.strictEqual(strength.label, "Strong");
-  assert.ok(strength.score >= 80);
+  assert.strictEqual(Model.hasSecureEntropy(), true);
+
+  // Test callback triggering on low entropy
+  var callbackTriggered = false;
+  Model.setEntropyReplenishCallback(function() {
+    callbackTriggered = true;
+  });
+
+  // Calling getRandomInt when pool is < 64 should trigger callback
+  Model.getRandomInt(10);
+  assert.strictEqual(callbackTriggered, true);
 
   const pass = Model.generatePassphrase({ wordCount: 4, separator: "-" });
   const words = pass.split("-");

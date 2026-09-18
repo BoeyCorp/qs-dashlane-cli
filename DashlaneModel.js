@@ -158,7 +158,8 @@ function activeWindowCommand() {
 }
 
 function screenLockStateCommand() {
-  return ["bash", "-c", "omarchy-shell lock isLocked 2>/dev/null | head -c 16"];
+  // Direct binary execution without bash subshell or pipe overhead.
+  return ["omarchy-shell", "lock", "isLocked"];
 }
 
 function screenIsLocked(raw) {
@@ -166,7 +167,14 @@ function screenIsLocked(raw) {
 }
 
 function sleepMonitorCommand() {
-  return ["bash", "-c", "gdbus monitor --system --dest org.freedesktop.login1 --object-path /org/freedesktop/login1 2>/dev/null | grep --line-buffered 'PrepareForSleep (true'"];
+  // Monitors systemd login1 for the PrepareForSleep signal.
+  // Exits immediately upon detecting sleep to avoid unbounded line
+  // accumulation, memory consumption, and zombie background pipes.
+  return [
+    "bash",
+    "-c",
+    "gdbus monitor --system --dest org.freedesktop.login1 --object-path /org/freedesktop/login1 2>/dev/null | while read -r line; do case \"$line\" in *'PrepareForSleep (true'*) echo 'sleep'; exit 0 ;; esac; done"
+  ];
 }
 
 function copyCommand(text) {
@@ -682,6 +690,11 @@ var WORD_LIST = [
 // falling back to predictable Math.random(), Service.qml feeds hardware random
 // bytes directly from /dev/urandom into _entropyPool.
 var _entropyPool = [];
+var _entropyReplenishCallback = null;
+
+function setEntropyReplenishCallback(cb) {
+  _entropyReplenishCallback = typeof cb === "function" ? cb : null;
+}
 
 function feedEntropy(uint32Array) {
   if (Array.isArray(uint32Array)) {
@@ -695,10 +708,36 @@ function entropyPoolSize() {
   return _entropyPool.length;
 }
 
+function hasSecureEntropy() {
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) return true;
+  if (typeof require !== "undefined") {
+    try {
+      if (require("crypto")) return true;
+    } catch (_e) {}
+  }
+  return _entropyPool.length > 0;
+}
+
 function getRandomInt(max) {
   if (max <= 1) return 0;
 
-  // 1. Browser / Web environment with Web Crypto API
+  // 1. Quickshell environment with /dev/urandom entropy pool (or explicitly fed pool)
+  // Proactively trigger background replenishment when pool drops below low-water mark (64 values)
+  if (_entropyReplenishCallback && _entropyPool.length < 64) {
+    _entropyReplenishCallback();
+  }
+
+  if (_entropyPool.length > 0) {
+    var limitPool = 0x100000000 - (0x100000000 % max);
+    while (_entropyPool.length > 0) {
+      var poolVal = _entropyPool.pop();
+      if (poolVal < limitPool) {
+        return poolVal % max;
+      }
+    }
+  }
+
+  // 2. Browser / Web environment with Web Crypto API
   if (typeof crypto !== "undefined" && crypto.getRandomValues) {
     var limit = 0x100000000 - (0x100000000 % max);
     var buf = new Uint32Array(1);
@@ -708,7 +747,7 @@ function getRandomInt(max) {
     return buf[0] % max;
   }
 
-  // 2. Node.js environment (for unit testing)
+  // 3. Node.js environment (for unit testing when pool is unseeded)
   if (typeof require !== "undefined") {
     try {
       var nodeCrypto = require("crypto");
@@ -721,18 +760,13 @@ function getRandomInt(max) {
     } catch (_e) {}
   }
 
-  // 3. Quickshell environment with /dev/urandom entropy pool
-  if (_entropyPool.length > 0) {
-    var limitPool = 0x100000000 - (0x100000000 % max);
-    while (_entropyPool.length > 0) {
-      var poolVal = _entropyPool.pop();
-      if (poolVal < limitPool) {
-        return poolVal % max;
-      }
-    }
+  // 4. Fallback if entropy pool is depleted before background replenishment completes
+  if (_entropyReplenishCallback) {
+    _entropyReplenishCallback();
   }
-
-  // 4. Fallback (if entropy pool is depleted before replenishment finishes)
+  if (typeof console !== "undefined" && console.warn) {
+    console.warn("[qs-dashlane-cli] CSPRNG entropy pool depleted; triggering replenishment");
+  }
   return Math.floor(Math.random() * max);
 }
 
@@ -886,6 +920,8 @@ if (typeof module !== "undefined" && module.exports) {
     getRandomInt: getRandomInt,
     feedEntropy: feedEntropy,
     entropyPoolSize: entropyPoolSize,
+    hasSecureEntropy: hasSecureEntropy,
+    setEntropyReplenishCallback: setEntropyReplenishCallback,
     _nextFallbackId: _nextFallbackId
   };
 }

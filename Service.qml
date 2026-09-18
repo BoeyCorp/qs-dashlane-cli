@@ -541,12 +541,18 @@ Item {
         }
       }
     }
+    onExited: function() {
+      // Re-arm monitor if vault is unlocked and suspend locking is enabled
+      if (root.lockOnSuspend && !root.locked && root.loggedIn) {
+        sleepMonitorProc.running = true;
+      }
+    }
   }
 
-  // Hardware entropy feeder process for CSPRNG
+  // Hardware entropy feeder process for CSPRNG (samples 256 32-bit unsigned ints = 1024 bytes)
   Process {
     id: entropyProc
-    command: ["sh", "-c", "head -c 128 /dev/urandom | od -An -tu4 -v | tr -s ' ' '\n' | grep -v '^$' | head -n 32"]
+    command: ["sh", "-c", "head -c 1024 /dev/urandom | od -An -tu4 -v | tr -s ' ' '\n' | grep -v '^$'"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -607,10 +613,10 @@ Item {
     }
   }
 
-  // Screen lock poll timer (polls every 3 seconds while vault is unlocked)
+  // Screen lock poll timer (polls every 15 seconds while vault is unlocked)
   Timer {
     id: screenLockPollTimer
-    interval: 3000
+    interval: 15000
     repeat: true
     running: root.lockOnScreenLock && !root.locked && root.loggedIn
     onTriggered: {
@@ -672,6 +678,9 @@ Item {
   }
 
   Component.onCompleted: {
+    Model.setEntropyReplenishCallback(function() {
+      root.replenishEntropy();
+    });
     refreshStatus();
     replenishEntropy();
   }
