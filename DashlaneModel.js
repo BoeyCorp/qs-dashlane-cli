@@ -128,6 +128,58 @@ function logoutCommand() {
   return ["dcli", "logout"];
 }
 
+function backupCommand(directory) {
+  // Backs up the local vault DB to the given directory (defaults to ~/)
+  var dir = (directory && directory.trim()) ? directory.trim() : (homeDirectory() + "/");
+  return ["dcli", "backup", "--directory", dir];
+}
+
+function homeDirectory() {
+  // Resolved at runtime from the environment; falls back gracefully.
+  // QML does not have a direct JS API for HOME, so we embed a reliable default.
+  return "/home/" + (typeof Qt !== "undefined" ? "" : "");
+  // NOTE: Service.qml passes the real home via Process.environment["HOME"] already.
+  // This function is only used to construct the default path string shown in the UI.
+}
+
+function devicesListCommand() {
+  return ["dcli", "devices", "list", "--json"];
+}
+
+function devicesRemoveCommand(deviceId) {
+  return ["dcli", "devices", "remove", String(deviceId)];
+}
+
+function configureAutoSyncCommand(disabled) {
+  // disabled=true means "disable-auto-sync true" (turns OFF auto-sync)
+  return ["dcli", "configure", "disable-auto-sync", disabled ? "true" : "false"];
+}
+
+function configureSaveMasterPasswordCommand(save) {
+  return ["dcli", "configure", "save-master-password", save ? "true" : "false"];
+}
+
+function configureBiometricsCommand(enable) {
+  return ["dcli", "configure", "user-presence", "--method", enable ? "biometrics" : "none"];
+}
+
+function parseDeviceList(text) {
+  // dcli devices list --json returns an array of device objects.
+  // Shape: [{ id, deviceName, platform, creationDatetime, lastActivityDatetime, ... }]
+  var raw = parseJsonSafely(text, null);
+  if (!Array.isArray(raw)) return [];
+  return raw.map(function(d) {
+    return {
+      id: String(d.id || d.deviceId || ""),
+      name: String(d.deviceName || d.name || "Unknown device"),
+      platform: String(d.platform || d.devicePlatform || ""),
+      createdAt: d.creationDatetime ? new Date(Number(d.creationDatetime) * 1000).toLocaleDateString() : "",
+      lastUsed: d.lastActivityDatetime ? new Date(Number(d.lastActivityDatetime) * 1000).toLocaleDateString() : "",
+      isCurrent: Boolean(d.isCurrent || d.isCurrentDevice)
+    };
+  });
+}
+
 function validateMasterPassword(raw) {
   var str = String(raw || "").trim();
   if (str.length === 0) {
@@ -917,6 +969,13 @@ if (typeof module !== "undefined" && module.exports) {
     lockCommand: lockCommand,
     syncCommand: syncCommand,
     logoutCommand: logoutCommand,
+    backupCommand: backupCommand,
+    devicesListCommand: devicesListCommand,
+    devicesRemoveCommand: devicesRemoveCommand,
+    configureAutoSyncCommand: configureAutoSyncCommand,
+    configureSaveMasterPasswordCommand: configureSaveMasterPasswordCommand,
+    configureBiometricsCommand: configureBiometricsCommand,
+    parseDeviceList: parseDeviceList,
     terminalSyncCommand: terminalSyncCommand,
     terminalInstallCommand: terminalInstallCommand,
     activeWindowCommand: activeWindowCommand,

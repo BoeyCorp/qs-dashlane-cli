@@ -608,7 +608,7 @@ Panel {
             Column {
               width: parent.width
               spacing: Style.space(12)
-              visible: vault && vault.selectedItem !== null
+              visible: vault && vault.selectedItem !== null && vault.activeView !== "devices"
 
               // Back button
               Button {
@@ -861,7 +861,7 @@ Panel {
             Column {
               width: parent.width
               spacing: Style.space(12)
-              visible: vault && vault.selectedItem === null && vault.activeTab === "generator"
+              visible: vault && vault.selectedItem === null && vault.activeTab === "generator" && vault.activeView !== "devices"
 
               // Back button
               Button {
@@ -1045,7 +1045,7 @@ Panel {
             Column {
               width: parent.width
               spacing: Style.space(12)
-              visible: vault && vault.selectedItem === null && vault.activeTab === "settings"
+              visible: vault && vault.selectedItem === null && vault.activeTab === "settings" && vault.activeView !== "devices"
 
               // Back button
               Button {
@@ -1118,6 +1118,52 @@ Panel {
 
               PanelSeparator { width: parent.width }
 
+              PanelSectionHeader { text: "DASHLANE CLI" }
+
+              RowLayout {
+                width: parent.width
+                Column {
+                  Layout.fillWidth: true
+                  spacing: Style.space(2)
+                  Text { text: "Disable auto-sync"; font.family: Style.font.family; font.pixelSize: Style.font.body; color: Color.foreground }
+                  Text { text: "Stop dcli from syncing automatically every hour"; font.family: Style.font.family; font.pixelSize: Style.font.caption; color: Qt.darker(Color.foreground, 1.5); wrapMode: Text.WordWrap }
+                }
+                ToggleSwitch {
+                  checked: vault ? vault.autoSyncDisabled : false
+                  onToggled: if (vault) vault.setAutoSyncDisabled(!vault.autoSyncDisabled)
+                }
+              }
+
+              RowLayout {
+                width: parent.width
+                Column {
+                  Layout.fillWidth: true
+                  spacing: Style.space(2)
+                  Text { text: "Save master password to keychain"; font.family: Style.font.family; font.pixelSize: Style.font.body; color: Color.foreground }
+                  Text { text: "Store encrypted master password in OS keychain for faster unlock"; font.family: Style.font.family; font.pixelSize: Style.font.caption; color: Qt.darker(Color.foreground, 1.5); wrapMode: Text.WordWrap }
+                }
+                ToggleSwitch {
+                  checked: vault ? vault.saveMasterPassword : true
+                  onToggled: if (vault) vault.setSaveMasterPassword(!vault.saveMasterPassword)
+                }
+              }
+
+              RowLayout {
+                width: parent.width
+                Column {
+                  Layout.fillWidth: true
+                  spacing: Style.space(2)
+                  Text { text: "Biometric unlock"; font.family: Style.font.family; font.pixelSize: Style.font.body; color: Color.foreground }
+                  Text { text: "Use fingerprint / biometrics instead of master password"; font.family: Style.font.family; font.pixelSize: Style.font.caption; color: Qt.darker(Color.foreground, 1.5); wrapMode: Text.WordWrap }
+                }
+                ToggleSwitch {
+                  checked: vault ? vault.biometricsEnabled : false
+                  onToggled: if (vault) vault.setBiometrics(!vault.biometricsEnabled)
+                }
+              }
+
+              PanelSeparator { width: parent.width }
+
               PanelSectionHeader { text: "ACTIONS" }
 
               Button {
@@ -1125,6 +1171,20 @@ Panel {
                 text: "Sync Vault Now"
                 iconText: "󰑐"
                 onClicked: vault.syncVault()
+              }
+
+              Button {
+                width: parent.width
+                text: "Backup Vault"
+                iconText: "󰆼"
+                onClicked: vault.backupVault()
+              }
+
+              Button {
+                width: parent.width
+                text: "Manage Devices"
+                iconText: "󰟀"
+                onClicked: vault.showDevices()
               }
 
               Button {
@@ -1144,12 +1204,146 @@ Panel {
             }
 
             // ---------------------------------------------------------------
+            // 4E: Device Management View
+            // ---------------------------------------------------------------
+            Column {
+              width: parent.width
+              spacing: Style.space(10)
+              visible: vault && vault.selectedItem === null && vault.activeView === "devices"
+
+              // Back button
+              Button {
+                text: "Back to settings"
+                iconText: "󰅁"
+                onClicked: vault.hideDevices()
+              }
+
+              PanelSeparator { width: parent.width }
+
+              PanelSectionHeader { text: "REGISTERED DEVICES" }
+
+              // Loading indicator
+              Text {
+                width: parent.width
+                text: "Loading devices…"
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+                color: Qt.darker(Color.foreground, 1.4)
+                horizontalAlignment: Text.AlignHCenter
+                visible: vault && vault.devicesLoading
+              }
+
+              // Error message
+              Text {
+                width: parent.width
+                text: vault ? vault.devicesError : ""
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                color: Color.urgent || "#e06c75"
+                wrapMode: Text.WordWrap
+                visible: vault && !vault.devicesLoading && vault.devicesError.length > 0
+              }
+
+              // Device list
+              Column {
+                width: parent.width
+                spacing: Style.space(6)
+                visible: vault && !vault.devicesLoading && vault.devicesError.length === 0
+
+                Repeater {
+                  model: vault ? vault.devices : []
+
+                  Rectangle {
+                    width: parent.width
+                    height: deviceCol.implicitHeight + Style.space(20)
+                    radius: Style.cornerRadius
+                    color: modelData.isCurrent
+                      ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.12)
+                      : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.05)
+                    border.color: modelData.isCurrent
+                      ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.35)
+                      : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.1)
+                    border.width: 1
+
+                    RowLayout {
+                      anchors.fill: parent
+                      anchors.margins: Style.space(10)
+                      spacing: Style.space(10)
+
+                      Text {
+                        text: "󰟀"
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.title
+                        color: modelData.isCurrent ? Color.accent : Qt.darker(Color.foreground, 1.3)
+                      }
+
+                      Column {
+                        id: deviceCol
+                        Layout.fillWidth: true
+                        spacing: Style.space(3)
+
+                        Text {
+                          width: parent.width
+                          text: modelData.name + (modelData.isCurrent ? "  ✓ this device" : "")
+                          font.family: Style.font.family
+                          font.pixelSize: Style.font.body
+                          font.bold: modelData.isCurrent
+                          color: modelData.isCurrent ? Color.accent : Color.foreground
+                          elide: Text.ElideRight
+                        }
+
+                        Text {
+                          text: (modelData.platform ? modelData.platform + " · " : "") +
+                                (modelData.lastUsed ? "Last used " + modelData.lastUsed : "")
+                          font.family: Style.font.family
+                          font.pixelSize: Style.font.caption
+                          color: Qt.darker(Color.foreground, 1.5)
+                          elide: Text.ElideRight
+                        }
+                      }
+
+                      Button {
+                        iconText: "󰆴"
+                        tooltipText: modelData.isCurrent ? "Cannot remove current device" : "Remove device"
+                        enabled: !modelData.isCurrent
+                        foreground: modelData.isCurrent ? Qt.darker(Color.foreground, 1.8) : (Color.urgent || "#e06c75")
+                        onClicked: {
+                          if (!modelData.isCurrent) {
+                            vault.removeDevice(modelData.id);
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+
+              // Empty state
+              Text {
+                width: parent.width
+                text: "No devices registered"
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+                color: Qt.darker(Color.foreground, 1.5)
+                horizontalAlignment: Text.AlignHCenter
+                visible: vault && !vault.devicesLoading && vault.devicesError.length === 0 && vault.devices.length === 0
+              }
+
+              Button {
+                width: parent.width
+                text: "Refresh"
+                iconText: "󰑐"
+                onClicked: vault.loadDevices()
+              }
+            }
+
+            // ---------------------------------------------------------------
             // 4D: Vault List View (Default)
             // ---------------------------------------------------------------
             Column {
               width: parent.width
               spacing: Style.space(8)
-              visible: vault && vault.selectedItem === null && vault.activeTab !== "generator" && vault.activeTab !== "settings"
+              visible: vault && vault.selectedItem === null && vault.activeTab !== "generator" && vault.activeTab !== "settings" && vault.activeView !== "devices"
 
               // Tabs Row
               RowLayout {

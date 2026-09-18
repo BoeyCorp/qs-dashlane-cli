@@ -86,6 +86,21 @@ Item {
   property double lastActivityTimestamp: Date.now()
 
   // ---------------------------------------------------------------------------
+  // CLI Config State (persisted across lock but reset on logout)
+  // ---------------------------------------------------------------------------
+  property bool autoSyncDisabled: false      // mirrors dcli configure disable-auto-sync
+  property bool saveMasterPassword: true     // mirrors dcli configure save-master-password
+  property bool biometricsEnabled: false     // mirrors dcli configure user-presence
+
+  // ---------------------------------------------------------------------------
+  // Device Management State
+  // ---------------------------------------------------------------------------
+  property var devices: []           // parsed from dcli devices list --json
+  property bool devicesLoading: false
+  property string devicesError: ""
+  property string activeView: "vault"  // "vault" | "devices"
+
+  // ---------------------------------------------------------------------------
   // Helpers & Filtering
   // ---------------------------------------------------------------------------
   function touchActivity() {
@@ -195,6 +210,49 @@ Item {
 
   function logout() {
     logoutProc.running = true;
+  }
+
+  function backupVault() {
+    backupProc.running = true;
+  }
+
+  function loadDevices() {
+    devicesLoading = true;
+    devicesError = "";
+    devicesProc.running = true;
+  }
+
+  function removeDevice(deviceId) {
+    devicesRemoveProc._deviceId = String(deviceId);
+    devicesRemoveProc.command = Model.devicesRemoveCommand(deviceId);
+    devicesRemoveProc.running = true;
+  }
+
+  function setAutoSyncDisabled(disabled) {
+    autoSyncDisabled = disabled;
+    configureAutoSyncProc.command = Model.configureAutoSyncCommand(disabled);
+    configureAutoSyncProc.running = true;
+  }
+
+  function setSaveMasterPassword(save) {
+    saveMasterPassword = save;
+    configureSavePwProc.command = Model.configureSaveMasterPasswordCommand(save);
+    configureSavePwProc.running = true;
+  }
+
+  function setBiometrics(enable) {
+    biometricsEnabled = enable;
+    configureBiometricsProc.command = Model.configureBiometricsCommand(enable);
+    configureBiometricsProc.running = true;
+  }
+
+  function showDevices() {
+    activeView = "devices";
+    loadDevices();
+  }
+
+  function hideDevices() {
+    activeView = "vault";
   }
 
   function launchTerminalSync() {
@@ -502,6 +560,9 @@ Item {
       root.searchQuery = "";
       root.lastCopiedPassword = "";
       root.pendingTotpCopy = "";
+      root.devices = [];
+      root.devicesError = "";
+      root.activeView = "vault";
       autoCopyTotpTimer.stop();
       clipboardClearTimer.stop();
 
@@ -618,6 +679,100 @@ Item {
   Process { id: openUrlProc }
   Process { id: terminalSyncProc }
   Process { id: terminalInstallProc }
+
+  // Vault backup
+  Process {
+    id: backupProc
+    command: Model.backupCommand(backupDirectory)
+    property string backupDirectory: ""
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.notifyViews("Vault backed up to " + (backupDirectory || "home directory"));
+      } else {
+        root.notifyViews("Backup failed — check dcli status");
+      }
+    }
+  }
+
+  // Device management — list
+  Process {
+    id: devicesProc
+    command: Model.devicesListCommand()
+    stdout: StdioCollector {
+      id: devicesStdout
+      waitForEnd: true
+    }
+    stderr: StdioCollector {
+      id: devicesStderr
+      waitForEnd: true
+    }
+    onExited: function(exitCode) {
+      root.devicesLoading = false;
+      if (exitCode === 0) {
+        root.devices = Model.parseDeviceList(devicesStdout.text);
+        if (root.devices.length === 0) {
+          root.devicesError = "No devices found.";
+        }
+      } else {
+        root.devicesError = "Could not load devices. Check your connection.";
+      }
+    }
+  }
+
+  // Device management — remove
+  Process {
+    id: devicesRemoveProc
+    property string _deviceId: ""
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.notifyViews("Device removed");
+        root.loadDevices();   // refresh list
+      } else {
+        root.devicesError = "Failed to remove device.";
+        root.notifyViews("Device removal failed");
+      }
+    }
+  }
+
+  // Configure: disable-auto-sync
+  Process {
+    id: configureAutoSyncProc
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.notifyViews(root.autoSyncDisabled ? "Auto-sync disabled" : "Auto-sync enabled");
+      } else {
+        // Revert optimistic update on failure
+        root.autoSyncDisabled = !root.autoSyncDisabled;
+        root.notifyViews("Failed to update auto-sync setting");
+      }
+    }
+  }
+
+  // Configure: save-master-password
+  Process {
+    id: configureSavePwProc
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.notifyViews(root.saveMasterPassword ? "Master password will be saved to keychain" : "Master password will NOT be saved");
+      } else {
+        root.saveMasterPassword = !root.saveMasterPassword;
+        root.notifyViews("Failed to update keychain setting");
+      }
+    }
+  }
+
+  // Configure: user-presence / biometrics
+  Process {
+    id: configureBiometricsProc
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.notifyViews(root.biometricsEnabled ? "Biometric unlock enabled" : "Biometric unlock disabled");
+      } else {
+        root.biometricsEnabled = !root.biometricsEnabled;
+        root.notifyViews("Failed to update biometrics setting");
+      }
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Timers
