@@ -13,6 +13,9 @@ Panel {
   ipcTarget: "io.github.boeycorp.qs-dashlane-cli"
   manageIpc: true
 
+  implicitWidth: button.implicitWidth
+  implicitHeight: button.implicitHeight
+
   // Shared background service (injected by Omarchy shell if running with service entry)
   property var service: null
 
@@ -96,8 +99,9 @@ Panel {
   // ---------------------------------------------------------------------------
   // Bar Widget Button
   // ---------------------------------------------------------------------------
-  WidgetButton {
+  BarIconButton {
     id: button
+    anchors.fill: parent
     bar: root.bar
     text: "󰌋" // Nerd Font key icon
     active: root.opened
@@ -110,10 +114,10 @@ Panel {
     }
 
     foreground: {
-      if (!vault) return Color.foreground;
+      if (!vault) return root.barForeground;
       if (vault.colorizeIcon && Color.accent) return Color.accent;
-      if (vault.locked) return Qt.darker(Color.foreground, 1.4);
-      return Color.foreground;
+      if (vault.locked) return Qt.darker(root.barForeground, 1.4);
+      return root.barForeground;
     }
 
     // Small status indicator dot inside the button
